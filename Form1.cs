@@ -18,8 +18,7 @@ namespace RTD
 
             stripChart1.MinValue = -2;
             stripChart1.MaxValue = 2;
-            stripChart1.InchesPerSecond = 0.1;
-            stripChart1.StartTime = DateTime.Now;
+            stripChart1.InchesPerSecond = 0.5;
 
             _sampleGenerator = new SampleGenerator(DateTime.Now, 2, 0.1, 0);
             _updateTimer = new Timer { Enabled = true, Interval = 10 };

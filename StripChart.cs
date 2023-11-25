@@ -15,8 +15,16 @@ namespace RTD
 
         #endregion Const
 
+        #region Properties
+        // TODO: This isn't used for anything.
+        public DateTime StartTime { get => _samples.Count > 0 ? _samples[0].time : DateTime.MinValue; }
+        public double MinValue { get => _minValue; set => _minValue = value; }
+        public double MaxValue { get => _maxValue; set => _maxValue = value; }
+        public string YAxisLabel { get => _yAxisLabel; set => _yAxisLabel = value; }
+        public double InchesPerSecond { get => _inchesPerSecond; set => _inchesPerSecond = value; }
+
+        #endregion Properties
         #region Fields
-        private bool _debug = false;
         private Font _labelFont;
         private Brush _labelBrush;
         private Pen _graphPen;
@@ -28,8 +36,6 @@ namespace RTD
         private ChartInfo _chartInfo;
 
         // TODO: Decide whether to maintain visible area start time separately, or just calculate from scroll.
-        private DateTime _startTime;
-        private DateTime _time;
         private int _firstVisibleIdx = 0;
         private DateTime _firstVisibleTime;
         private int _firstNewSampleIndex = 0;
@@ -66,12 +72,6 @@ namespace RTD
 
         #endregion Types
 
-        #region Properties
-        // TODO: Remove this. Was added to fix designer error.
-        public string YAxisLabel { get; set; }
-
-
-        #endregion Properties
 
         #region Methods
         public StripChart(DateTime? startTime = null,
@@ -82,8 +82,7 @@ namespace RTD
         {
             InitializeComponent();
 
-            _startTime = startTime ?? DateTime.Now;
-            _firstVisibleTime = _startTime; // TEMP DEBUG - scroll-dependent
+            _firstVisibleTime = DateTime.MinValue; // TEMP DEBUG - scroll-dependent
             _minValue = minValue;
             _maxValue = maxValue;
             _inchesPerSecond = inchesPerSecond;
@@ -100,7 +99,7 @@ namespace RTD
             Console.WriteLine($"Position: ({hScrollBar.Left},{hScrollBar.Top})");
 
             // Process newly-added samples.
-            _updateTimer = new Timer { Enabled = true, Interval = 1000 };
+            _updateTimer = new Timer { Enabled = true, Interval = 100 };
             _updateTimer.Tick += UpdateTimerTick;
 
             panel.Invalidate();
@@ -109,12 +108,9 @@ namespace RTD
         private Rectangle GetClipRect(Sample firstSample, Sample lastSample)
         {
             // Determine time distance from left visible edge
-            // TODO: This assumes _firstVisibleIdx will be reliably set on scroll.
-            int x1 = (int)((firstSample.time -
-                    _samples[_firstVisibleIdx].time).TotalSeconds *
+            int x1 = (int)((firstSample.time - _firstVisibleTime).TotalSeconds *
                     _chartInfo.PixelsPerSecond);
-            int x2 = x1 + (int)Math.Ceiling((lastSample.time -
-                    _samples[_firstVisibleIdx].time).TotalSeconds *
+            int x2 = x1 + (int)Math.Ceiling((lastSample.time - _firstVisibleTime).TotalSeconds *
                     _chartInfo.PixelsPerSecond);
 
             var plotRect = GetPlotArea();
@@ -158,6 +154,8 @@ namespace RTD
 
         public void AddSample(DateTime time, double value)
         {
+            if (_samples.Count == 0)
+                _firstVisibleTime = time;
             _samples.Add( new Sample { time = time, value = value } );
         }
 
@@ -167,7 +165,8 @@ namespace RTD
         private void hScrollBar_Scroll(object sender, ScrollEventArgs e)
         {
             var sb = sender as HScrollBar;
-            Console.WriteLine($"HScrollBar.Value: {sb.Value}");
+            //Console.WriteLine($"HScrollBar.Value: {sb.Value}");
+            panel.Invalidate();
         }
 
         private int GetSampleIndexAtTime(DateTime time, bool lessOrEqual = false)
@@ -185,9 +184,9 @@ namespace RTD
                 if (lessOrEqual)
                 {
                     // Work backwards to find first element <= target.
-                    for (int i = index; i >= 0; i--)
+                    for (int i = index - 1; i >= 0; i--)
                     {
-                        if (_samples[i].time <= time)
+                        if (time <= _samples[i].time)
                         {
                             return i;
                         }
@@ -219,7 +218,6 @@ namespace RTD
             // TODO: This is crude...
             ret.GraphArea.Height = panel.Height - hScrollBar.Height;
             // Get time offset to both edges of clip area.
-            // TODO: _startTime needs to be replaced with time of left of visible area.
             DateTime timeLeft = _firstVisibleTime + TimeSpan.FromSeconds(clipRect.Left / ret.PixelsPerSecond);
             DateTime timeRight = _firstVisibleTime + TimeSpan.FromSeconds(clipRect.Right / ret.PixelsPerSecond);
 
@@ -246,14 +244,53 @@ namespace RTD
             return new Point(x, y);
         }
 
-        private void stripChart_Paint(object sender, PaintEventArgs e)
+        private bool ShiftViewportMaybe()
         {
+            if (_firstNewSampleIndex == 0)
+                return false;
+            // Where was last sample added?
+            var firstNewSampleTime = _samples[_firstNewSampleIndex - 1].time;
+            int lastSampleOffset = (int)(
+                (firstNewSampleTime - _firstVisibleTime).TotalSeconds * _chartInfo.PixelsPerSecond);
+            // Is a new sample being added within a band near the right edge of the visible area?
+            // Note: We don't shift if the user has scrolled leftward such that the added samples are off the screen.
+            var fractionalOffset = (double)lastSampleOffset / _chartInfo.GraphArea.Width;
+            // TODO: Consider randomizing the threshold a bit to prevent many strip charts from shifting at once.
+            if (fractionalOffset > 0.75 && fractionalOffset < 1.0)
+            {
+                // TODO: Consider adding a configurable delta.
+                _firstVisibleTime = firstNewSampleTime;
+                UpdateScrollBar();
+
+                panel.Invalidate();
+                return true;
+            }
+
+            return false;
+        }
+        private void UpdateScrollBar()
+        {
+            if (_samples.Count == 0)
+                return;
+
+            // Calculate width in seconds of each virtual screen.
+            var secondsPerScreen = _chartInfo.GraphArea.Width / _chartInfo.PixelsPerSecond;
+
+            // Calculate current virtual screen.
+            int curScreenIdx = (int)Math.Round((_firstVisibleTime - StartTime).TotalSeconds / secondsPerScreen);
+
+            // Calculate virtual screen index of final sample.
+            var lastSample = _samples[_samples.Count - 1];
+            var totalTimeSpan = lastSample.time - StartTime;
+            int fullScreenCount = (int)(totalTimeSpan.TotalSeconds / secondsPerScreen);
+
+            hScrollBar.Minimum = 0;
+            hScrollBar.Maximum = fullScreenCount - 1;
+            hScrollBar.Value = curScreenIdx;
 
         }
-        // TODO: Rename.
         private void panel_Paint(object sender, PaintEventArgs e)
         {
-            if (_debug) return;
             // Attempt at vertical text.
             var size = panel.Size;
             var g = e.Graphics;
@@ -264,6 +301,9 @@ namespace RTD
             _chartInfo = GetChartInfo(g, e.ClipRectangle);
             if (_chartInfo == null || _chartInfo.firstSampleIdx < 0)
                 // Nothing to do...
+                return;
+            // Decide whether a shift is required.
+            if (ShiftViewportMaybe())
                 return;
 
             // Loop over all samples not yet added.
