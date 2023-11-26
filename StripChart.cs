@@ -244,30 +244,66 @@ namespace RTD
             return new Point(x, y);
         }
 
+        class SampleInfo
+        {
+            public bool Visible;
+            public int PixelOffset;
+            public double FractionalOffset;
+            public bool InEndZone;
+        }
+        private SampleInfo TestSample(Sample sample)
+        {
+            double offset = (sample.time - _firstVisibleTime).TotalSeconds * _chartInfo.PixelsPerSecond;
+            double fractionalOffset = (offset - _chartInfo.GraphArea.Left) / _chartInfo.GraphArea.Width;
+            bool visible = fractionalOffset >= 0 && fractionalOffset <= 1;
+            return new SampleInfo
+            {
+                PixelOffset = (int)offset,
+                FractionalOffset = fractionalOffset,
+                Visible = visible,
+                // TODO: No magic...
+                InEndZone = fractionalOffset >= 0.75 && visible
+            };
+        }
         private bool ShiftViewportMaybe()
         {
             if (_firstNewSampleIndex == 0)
                 return false;
             // Where was last sample added?
-            var firstNewSampleTime = _samples[_firstNewSampleIndex - 1].time;
-            int lastSampleOffset = (int)(
-                (firstNewSampleTime - _firstVisibleTime).TotalSeconds * _chartInfo.PixelsPerSecond);
-            // Is a new sample being added within a band near the right edge of the visible area?
-            // Note: We don't shift if the user has scrolled leftward such that the added samples are off the screen.
-            var fractionalOffset = (double)lastSampleOffset / _chartInfo.GraphArea.Width;
-            // TODO: Consider randomizing the threshold a bit to prevent many strip charts from shifting at once.
-            if (fractionalOffset > 0.75 && fractionalOffset < 1.0)
+            // TODO: Clean up with helper methods.
+            var firstSampleInfo = TestSample(_samples[_firstNewSampleIndex]);
+            var lastSampleInfo = TestSample(_samples[_chartInfo.lastSampleIdx]);
+            // Test: Is first added sample is visible and final added sample is >= threshold near end of visible area.
+            // If so, then place the final added sample at or just past left edge of visible area, adding enough full
+            // screens as required to cover the final sample.
+            // Note: We don't shift if the user has scrolled leftward such that the added samples are entirely off screen.
+            if (firstSampleInfo.Visible && (lastSampleInfo.InEndZone || !lastSampleInfo.Visible))
             {
                 // TODO: Consider adding a configurable delta.
-                _firstVisibleTime = firstNewSampleTime;
+                // Question: Should we align first or last sample at start? If the former, we need to account for
+                // unlikely possibility that last sample will force another shift. Hmm...
+                _firstVisibleTime = _samples[_firstNewSampleIndex].time;
                 UpdateScrollBar();
 
                 panel.Invalidate();
                 return true;
+
             }
 
             return false;
         }
+        /*
+        Describe changes...
+        Addition of samples 
+        Shift
+        Note: Time locations of the beginning of each virtual screen never change.
+        Corollary: If the small change size is fixed, and we always add whole numbers of screens, each scroll position
+        has a fixed time associated with it for all time. The scroll bar's maximum changes an amount corresponding to a
+        full screen.
+        Question: What if we're not on a screen boundary when shift occurs?
+        Answer: Doesn't matter. If not on final screen, we must be on penultimate (else shift wouldn't occur). Add the
+new screen and shift to wherever we like, which doesn't need to be at the start of a screen.
+        */
         private void UpdateScrollBar()
         {
             if (_samples.Count == 0)
@@ -286,6 +322,8 @@ namespace RTD
 
             hScrollBar.Minimum = 0;
             hScrollBar.Maximum = fullScreenCount - 1;
+            hScrollBar.SmallChange = 1; // FIXME!!! No magic constants
+            hScrollBar.LargeChange = 10;
             hScrollBar.Value = curScreenIdx;
 
         }
