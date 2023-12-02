@@ -12,7 +12,7 @@ namespace RTD
         private const string YAxisLabelDefault = "Y Axis";
         private const double MinValueDefault = 0;
         private const double MaxValueDefault = 100;
-        const int ScrollLargeChange = 10;
+        private const double SecondsPerSmallChange = 0.1;
         internal const double MaxNewSampleFractionalOffset = 0.75;
 
         #endregion Const
@@ -306,9 +306,11 @@ namespace RTD
             var oldFvt = _firstVisibleTime;
             _firstVisibleTime += TimeSpan.FromSeconds(timeOffset);
             Console.WriteLine($"OnScroll: Max: {sb.Maximum} Value: {sb.Value} timeOffset={timeOffset} new fvt={_firstVisibleTime} delta={(_firstVisibleTime - oldFvt).TotalSeconds} oldValue={sb.Value} newValue={e.NewValue}");
-            // Limit leftward travel.
+            // Limit leftward travel and rightward travel.
             if (_firstVisibleTime < _samples[0].time)
                 _firstVisibleTime = _samples[0].time;
+            else if (_firstVisibleTime > _samples[_samples.Count - 1].time)
+                _firstVisibleTime = _samples[_samples.Count - 1].time;
 
             // Assume plot needs full redraw.
             panel.Invalidate();
@@ -330,41 +332,52 @@ new screen and shift to wherever we like, which doesn't need to be at the start 
             if (_samples.Count == 0)
                 return;
 
-            // Calculate total time span require to cover all samples with a little to spare.
-            // Logic: SmallChange is always 1, so LargeChange is the number of small scrolls needed to move by a full screen.
+            // Calculate total time span required to cover all samples with a little to spare.
+            double totalTimeWidth = (_samples[_samples.Count - 1].time - _samples[0].time).TotalSeconds;
+            // Calculate time span of single screen full.
             double screenTimeWidth = _chartInfo.GraphArea.Width / _chartInfo.PixelsPerSecond;
-            double secondsPerLargeChange = screenTimeWidth;
-            double secondsPerSmallChange = Math.Floor(screenTimeWidth / ScrollLargeChange);
+
+            // Logic: SmallChange is always 1, and LargeChange is scaled to the window.
+            double secondsPerLargeChange = screenTimeWidth / 2; // TODO: No magic
+
+            // Make large change the number of small changes corresponding to around half a window.
+            var largeChange = (int)Math.Ceiling(screenTimeWidth / 2 / SecondsPerSmallChange);
+            // TODO: Subtracting screenTimeWidth makes sense only if we don't want to be able to scroll the final sample
+            // time in from the right edge of the window (as would be the case when displaying an image). In fact, we
+            // needn't subtract anything from totalTimeWidth, unless we want to ensure that there's always at least a
+            // few samples visible on the screen when we're scrolled all the way to the right.
+            var maxValue =
+                (int)Math.Ceiling(Math.Max(0, totalTimeWidth /*- screenTimeWidth*/) / SecondsPerSmallChange) + largeChange - 1;
+
+            //double secondsPerSmallChange = Math.Floor(screenTimeWidth / SmallChangesPerSecond);
             //double totalSampleTimeWidth = (_samples[_samples.Count - 1].time - _samples[0].time).TotalSeconds;
             // Calculate number of steps in each direction from first visible sample.
             // Design Decision: Ceiling ensures the final step to 0 will always get us at least to the first sample; in
             // fact, it may put us before the first sample, so we'll need to limit it.
             int stepsLeft =
-                (int)Math.Ceiling((_firstVisibleTime - _samples[0].time).TotalSeconds
-                / secondsPerSmallChange);
-            // Design Decision: Don't try to place the final sample exactly at certain spot. Just ensure it will be on
-            // the final screen but not more than 2 small changes in.
+                (int)Math.Ceiling((_firstVisibleTime - _samples[0].time).TotalSeconds / SecondsPerSmallChange);
             // Caveat: Max() prevents stepsRight from going negative when samples span less than a screen.
+            // TODO: Not sure stepsRight is needed...
             int stepsRight =
                 Math.Max(0, (int)Math.Floor(
                 (_samples[_samples.Count - 1].time -
-                _firstVisibleTime - TimeSpan.FromSeconds(secondsPerSmallChange)).TotalSeconds
-                / secondsPerSmallChange));
+                _firstVisibleTime - TimeSpan.FromSeconds(SecondsPerSmallChange)).TotalSeconds
+                / SecondsPerSmallChange));
 
             // Cache for use in handler.
             _scrollInfo = new ScrollInfo {
                 SecondsPerLargeChange = secondsPerLargeChange,
-                SecondsPerSmallChange = secondsPerSmallChange,
+                SecondsPerSmallChange = SecondsPerSmallChange,
                 ScrollValue = stepsLeft
             };
-            Console.WriteLine($"UpdateScrollBar: max: {hScrollBar.Maximum} Value: {hScrollBar.Value} stepsLeft={stepsLeft} stepsRight={stepsRight} secondsPerSmallChange={secondsPerSmallChange} secondsPerLargeChange={secondsPerLargeChange}");
+            Console.WriteLine($"UpdateScrollBar: max: {hScrollBar.Maximum} Value: {hScrollBar.Value} stepsLeft={stepsLeft} stepsRight={stepsRight} SecondsPerSmallChange={SecondsPerSmallChange} secondsPerLargeChange={secondsPerLargeChange}");
             // Update scrollbar with events inhibited.
             inhibitScrollEvent = true;
             hScrollBar.Minimum = 0;
-            hScrollBar.Maximum = stepsLeft + stepsRight;
+            hScrollBar.SmallChange = 1;
+            hScrollBar.LargeChange = largeChange;
+            hScrollBar.Maximum = maxValue;
             hScrollBar.Value = stepsLeft;
-            hScrollBar.SmallChange = 1; // FIXME!!! No magic constants
-            hScrollBar.LargeChange = ScrollLargeChange;
             inhibitScrollEvent = false;
 
         }
@@ -431,7 +444,11 @@ new screen and shift to wherever we like, which doesn't need to be at the start 
             _firstNewSampleIndex = -1;
 
             UpdateScrollBar();
+            
+        }
 
+        private void LabelStuff()
+        {
             /*
             g.TranslateTransform(20, panel.Height / 2);
             g.RotateTransform(90);
@@ -445,7 +462,7 @@ new screen and shift to wherever we like, which doesn't need to be at the start 
                     _labelBrush, new Point(i * 150, 100));
             }
             */
-            
+
         }
     }
 }
