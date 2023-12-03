@@ -10,36 +10,58 @@ using System.Windows.Forms;
 
 namespace RTD
 {
-    public partial class Form1 : Form
+    public partial class stripChartDemoForm : Form
     {
-        public Form1()
+        public stripChartDemoForm()
         {
             InitializeComponent();
 
-            stripChart1.MinValue = -2;
-            stripChart1.MaxValue = 2;
-            stripChart1.InchesPerSecond = 0.5;
-
-            _sampleGenerator = new SampleGenerator(DateTime.Now, 2, 0.1, 0);
-            _updateTimer = new Timer { Enabled = true, Interval = 10 };
-            _updateTimer.Tick += _updateTimer_Tick;
+            stripChartPropertyGrid.SelectedObject = stripChart;
+            stripChartPropertyGrid.BrowsableAttributes = new AttributeCollection(new StripChart.StripChartConfigAttribute());
+            stripChartPropertyGrid.Refresh();
 
         }
 
+        #region Implementation Methods
         private void _updateTimer_Tick(object sender, EventArgs e)
         {
             (DateTime time, double value) = _sampleGenerator.Next();
-            this.stripChart1.AddSample(time, value);
+            this.stripChart.AddSample(time, value);
+        }
+        private void StartPlotting()
+        {
+            _sampleGenerator = new SampleGenerator(DateTime.Now, 2, 0.1, 0);
+            _updateTimer = new Timer { Enabled = true, Interval = 10 };
+            _updateTimer.Tick += _updateTimer_Tick;
+        }
+        private void StopPlotting()
+        {
+            _updateTimer.Enabled = false;
+            _updateTimer.Dispose();
+
+            stripChart.Reset();
+        }
+        private void pauseButton_CheckedChanged(object sender, EventArgs e)
+        {
+            var cb = sender as CheckBox;
+            if (cb.Checked)
+                StartPlotting();
+            else
+                StopPlotting();
         }
 
         private void Form1_Load(object sender, EventArgs e)
         {
 
         }
+        #endregion Implementation Methods
 
+        #region Fields
         private Timer _updateTimer;
         private SampleGenerator _sampleGenerator;
+        #endregion Fields
 
+        #region Types
         class SampleGenerator
         {
             private DateTime _startTime;
@@ -62,5 +84,7 @@ namespace RTD
                 return (dt, value);
             }
         }
+        #endregion Types
+
     }
 }

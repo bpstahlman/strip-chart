@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace RTD
@@ -9,138 +10,247 @@ namespace RTD
     {
         #region Const
         private const double InchesPerSecondDefault = 0.1;
+        private const double SecondsPerSmallChangeDefault = 0.1;
+        private const int LargeStepsPerScreenDefault = 2;
+        internal const double ShiftAtFractionDefault = 0.75;
+        internal const double ShiftToFractionDefault = 0.1;
+        internal const double ShiftToMaxFractionDefault = 0.5;
+        private const double RangeMinDefault = -2;
+        private const double RangeMaxDefault = 2;
         private const string YAxisLabelDefault = "Y Axis";
-        private const double MinValueDefault = 0;
-        private const double MaxValueDefault = 100;
-        private const double SecondsPerSmallChange = 0.1;
-        internal const double MaxNewSampleFractionalOffset = 0.75;
-
+        private const int UpdateTimerPeriod = 100;
         #endregion Const
 
-        #region Properties
-        // TODO: This isn't used for anything.
-        public DateTime StartTime { get => _samples.Count > 0 ? _samples[0].time : DateTime.MinValue; }
-        public double MinValue { get => _minValue; set => _minValue = value; }
-        public double MaxValue { get => _maxValue; set => _maxValue = value; }
-        public string YAxisLabel { get => _yAxisLabel; set => _yAxisLabel = value; }
-        public double InchesPerSecond { get => _inchesPerSecond; set => _inchesPerSecond = value; }
+        #region Attributes
+        [AttributeUsage(AttributeTargets.Property, Inherited = false)]
+        public class StripChartConfigAttribute : Attribute
+        {
+            // TODO: Members needed?
+        }
+        #endregion Attributes
+        #region Config Properties
+        // These properties are exposed to component user.
+        [StripChartConfig]
+        public double RangeMin {
+			get => _rangeMin;
+            set
+            {
+                _rangeMin = value;
+            }
+		}
+        [StripChartConfig]
+        public double RangeMax {
+			get => _rangeMax;
+            set
+            {
+                _rangeMax = value;
+            }
+		}
+        [StripChartConfig]
+        public int LargeStepsPerScreen {
+			get => _largeStepsPerScreen;
+            set
+            {
+                _largeStepsPerScreen = value;
+            }
+		}
+        [StripChartConfig]
+        public double ShiftAtFraction {
+			get => _shiftAtFraction;
+            set
+            {
+                _shiftAtFraction = value;
+            }
+		}
+        [StripChartConfig]
+        public double SecondsPerSmallChange {
+			get => _secondsPerSmallChange;
+            set
+            {
+                _secondsPerSmallChange = value;
+            }
+		}
+        [StripChartConfig]
+        public double InchesPerSecond {
+			get => _inchesPerSecond;
+            set
+            {
+                _inchesPerSecond = value;
+            }
+		}
+        [StripChartConfig]
+        public Font LabelFont {
+			get => _labelFont;
+            set
+            {
+                _labelFont = value;
+            }
+		}
+        [StripChartConfig]
+        public Brush LabelBrush {
+			get => _labelBrush;
+            set
+            {
+                _labelBrush = value;
+            }
+		}
+        [StripChartConfig]
+        public Pen GraphPen {
+			get => _graphPen;
+            set
+            {
+                _graphPen = value;
+            }
+		}
 
-        #endregion Properties
-        #region Fields
+        #endregion Config Properties
+
+        #region Config Fields
+        private double _rangeMin;
+        private double _rangeMax;
+        private int _largeStepsPerScreen;
+        private double _shiftAtFraction;
+        private double _secondsPerSmallChange;
+        private double _inchesPerSecond;
+
+        // Appearance
         private Font _labelFont;
         private Brush _labelBrush;
         private Pen _graphPen;
+        #endregion Config Fields
 
-        private double _minValue;
-        private double _maxValue;
-        private string _yAxisLabel;
-        private double _inchesPerSecond;
-        private ChartInfo _chartInfo;
+        #region Helper Properties
+        // Internal use properties
+        Sample FirstSample { get => _samples.Count > 0 ? _samples[0] : null; }
+        Sample LastSample { get => _samples.Count > 0 ? _samples[_samples.Count - 1] : null; }
+        bool HaveNewSamples
+        {
+            get => _firstNewSampleIndex >= 0;
+        }
+        bool HaveSamples { get => _samples.Count > 0; }
+        // TODO: Redo StartTime property to allow user to set a start time earlier than the first sample.
+        public DateTime StartTime { get => _samples.Count > 0 ? _samples[0].Time : DateTime.MinValue; }
+        #endregion Helper Properties
 
-        // TODO: Decide whether to maintain visible area start time separately, or just calculate from scroll.
-        private int _firstVisibleIdx = 0;
-        private DateTime _firstVisibleTime;
+        #region Fields
+        private PaintInfo _paintInfo;
+        private ScrollInfo _scrollInfo = null;
+        private DateTime _firstVisibleTime = DateTime.MinValue;
         private int _firstNewSampleIndex = -1;
         private List<Sample> _samples = new List<Sample>();
         private Timer _updateTimer;
 
         private bool inhibitScrollEvent;
-        private ScrollInfo _scrollInfo = null;
 
         #endregion Fields
         #region Types
-        enum ScrollConfig
-        {
-            SmallChange = 1,
-            LargeChange = 10
-        };
         class ScrollInfo
         {
             public double SecondsPerSmallChange;
             public double SecondsPerLargeChange;
             public int ScrollValue;
         }
+        class PaintInfo
+        {
+            public int FirstSampleIdx;
+            public int LastSampleIdx;
+            public DateTime FirstVisibleTime;
+            public Rectangle PlotArea;
+            public double PixelsPerSecond;
+        }
+        class SampleInfo
+        {
+            public DateTime Time;
+            public bool Visible;
+            public int PixelOffset;
+            public double FractionalOffset;
+            public bool InEndZone;
+        }
 
         class Sample : IComparable<Sample>
         {
-            public DateTime time;
-            public double value;
+            public DateTime Time;
+            public double Value;
             public int CompareTo(Sample rhs)
             {
-                if (time < rhs.time) { return -1; }
-                else if (time > rhs.time) { return 1; }
+                if (Time < rhs.Time) { return -1; }
+                else if (Time > rhs.Time) { return 1; }
                 else { return 0; }
             }
-            public static bool operator <(Sample lhs, Sample rhs) => lhs.time < rhs.time;
-            public static bool operator <=(Sample lhs, Sample rhs) => lhs.time <= rhs.time;
-            public static bool operator >(Sample lhs, Sample rhs) => lhs.time > rhs.time;
-            public static bool operator >=(Sample lhs, Sample rhs) => lhs.time <= rhs.time;
-        }
-
-        class ChartInfo
-        {
-            public int firstSampleIdx;
-            public int lastSampleIdx;
-            public DateTime firstVisibleTime;
-            public Rectangle GraphArea;
-            public double PixelsPerSecond;
+            public static bool operator <(Sample lhs, Sample rhs) => lhs.Time < rhs.Time;
+            public static bool operator <=(Sample lhs, Sample rhs) => lhs.Time <= rhs.Time;
+            public static bool operator >(Sample lhs, Sample rhs) => lhs.Time > rhs.Time;
+            public static bool operator >=(Sample lhs, Sample rhs) => lhs.Time <= rhs.Time;
         }
 
         #endregion Types
 
 
         #region Methods
-        public StripChart(DateTime? startTime = null,
-            double minValue = MinValueDefault,
-            double maxValue = MaxValueDefault,
-            double inchesPerSecond = InchesPerSecondDefault,
-            string yAxisLabel = YAxisLabelDefault)
+        public StripChart()
         {
             InitializeComponent();
 
-            _firstVisibleTime = DateTime.MinValue; // TEMP DEBUG - scroll-dependent
-            _minValue = minValue;
-            _maxValue = maxValue;
-            _inchesPerSecond = inchesPerSecond;
-            _yAxisLabel = yAxisLabel;
+            // TODO: Initialize config properties to defaults.
+            InitializePropertyDefaults();
+
+
+            // TODO: Remove this if no longer needed.
+            //hScrollBar.Visible = true;
+            //hScrollBar.BringToFront();
+
+            // Initialize timer for adding accumulated samples to the plot periodically.
+            _updateTimer = new Timer { Enabled = true, Interval = UpdateTimerPeriod };
+            _updateTimer.Tick += UpdateTimerTick;
+
+            // Draw plot once even before samples have been provided.
+            panel.Invalidate();
+        }
+
+        public void Reset()
+        {
+            // Question: Stop timer?
+            _samples.Clear();
+            panel.Invalidate();
+            _firstNewSampleIndex = -1;
+        }
+        private void InitializePropertyDefaults()
+        {
+            RangeMin = RangeMinDefault;
+            RangeMax = RangeMaxDefault;
+            LargeStepsPerScreen = LargeStepsPerScreenDefault;
+            ShiftAtFraction = ShiftAtFractionDefault;
+            SecondsPerSmallChange = SecondsPerSmallChangeDefault;
+            InchesPerSecond = InchesPerSecondDefault;
 
             // Create and cache fonts, brushes, etc.
             _labelFont = new Font(Font, FontStyle.Bold);
             _labelBrush = new SolidBrush(Color.Black);
             _graphPen = new Pen(Color.Black);
-
-            hScrollBar.Visible = true;
-            hScrollBar.BringToFront();
-            Console.WriteLine($"Size: {hScrollBar.Size}");
-            Console.WriteLine($"Position: ({hScrollBar.Left},{hScrollBar.Top})");
-
-            // Process newly-added samples.
-            _updateTimer = new Timer { Enabled = true, Interval = 100 };
-            _updateTimer.Tick += UpdateTimerTick;
-
-            panel.Invalidate();
         }
 
+        // TODO: Alter api to allow multiple samples at same time (AddSamples) or like this for separate but specifying which trace.
         public void AddSample(DateTime time, double value)
         {
-            if (_samples.Count == 0)
+            if (!HaveSamples)
                 _firstVisibleTime = time;
-            if (_firstNewSampleIndex < 0)
+            if (!HaveNewSamples)
                 _firstNewSampleIndex = _samples.Count;
-            _samples.Add( new Sample { time = time, value = value } );
+            // Accumulate a single sample.
+            _samples.Add( new Sample { Time = time, Value = value } );
         }
 
+        // Return a clipping rectangle that covers the input pair of samples.
         private Rectangle GetClipRect(Sample firstSample, Sample lastSample)
         {
             // Determine time distance from left visible edge
-            int x1 = (int)((firstSample.time - _firstVisibleTime).TotalSeconds *
-                    _chartInfo.PixelsPerSecond);
-            int x2 = x1 + (int)Math.Ceiling((lastSample.time - _firstVisibleTime).TotalSeconds *
-                    _chartInfo.PixelsPerSecond);
+            int x1 = (int)((firstSample.Time - _firstVisibleTime).TotalSeconds *
+                    _paintInfo.PixelsPerSecond);
+            int x2 = x1 + (int)Math.Ceiling((lastSample.Time - _firstVisibleTime).TotalSeconds *
+                    _paintInfo.PixelsPerSecond);
 
             var plotRect = GetPlotArea();
 
-            // TODO: Need a way to get plot area.
             Rectangle clip = new Rectangle
             {
                 X = x1,
@@ -152,139 +262,130 @@ namespace RTD
             return clip;
         }
 
+        // Return Rectangle corresponding to the plot area (excluding axes, labels, title, etc.).
+        // TODO: Take axes, labels, etc. into account.
         private Rectangle GetPlotArea()
         {
-            // TODO: May eventually need something more complex that accounts for axes, etc...
-            return panel.ClientRectangle;
+            var ret = panel.ClientRectangle;
+            ret.Height = panel.Height - hScrollBar.Height;
+            return ret;
         }
 
-        // Process unprocessed samples...
+        // Process samples added since the last tick...
         private void UpdateTimerTick(object sender, EventArgs e)
         {
-            if (_firstNewSampleIndex < 0)
+            if (!HaveNewSamples)
                 // Nothing to do...
                 return;
 
-            (Sample firstSample, Sample lastSample) =
-                (_samples[_firstNewSampleIndex], _samples[_samples.Count - 1]);
-            var clipRect = GetClipRect(firstSample, lastSample);
+            // Calculate a clipping rect covering the range of samples added.
+            var clipRect = GetClipRect(_samples[_firstNewSampleIndex], _samples[_samples.Count - 1]);
 
-            // Actual clip rect is the intersection of the one calculated above with the visible area.
+            // Find the intersection of the sample range rect with the visible area.
             clipRect.Intersect(GetPlotArea());
-            Console.WriteLine($"Final ClipRect: {clipRect}");
 
             if (clipRect.Width > 0)
                 panel.Invalidate(clipRect);
 
         }
 
-        #endregion Methods
-
-
+        // Calcualate index of sample most nearly corresponding to input time, considering lessOrEqual to determine
+        // whether to return index just below or above where no exact match exists.
         private int GetSampleIndexAtTime(DateTime time, bool lessOrEqual = false)
         {
-            if (_samples.Count == 0)
+            if (!HaveSamples)
                 return -1;
 
-            int index = _samples.BinarySearch(new Sample { time = time, value = 0.0 },
+            // Note: If no exact match, BinarySearch finds sample just past the sought time.
+            int index = _samples.BinarySearch(new Sample { Time = time, Value = 0.0 },
                 Comparer<Sample>.Create((Sample a, Sample b) => a.CompareTo(b)));
             if (index < 0)
             {
-                // Didn't find exact match.
+                // Didn't find exact match. Bitwise complement of index points either just past end of list or to the
+                // first sample larger than requested time.
                 index = ~index;
-                // index points either to 1 past end of list or to element just larger than requested.
                 if (lessOrEqual)
                 {
                     // Work backwards to find first element <= target.
                     for (int i = index - 1; i >= 0; i--)
-                    {
-                        if (time <= _samples[i].time)
-                        {
+                        if (time <= _samples[i].Time)
                             return i;
-                        }
-                    }
                     // If here, reached beginning of list.
                     return 0;
                 }
                 else // greater or equal
-                {
                     // If index points past end, return final element of list.
                     return index < _samples.Count ? index : _samples.Count - 1;
-                }
             }
             // Found exact match.
             return index;
         }
 
-        // Convert sample to point.
-        private Point GetPoint(ChartInfo chartInfo, Sample sample)
+        // Convert sample to pixel offset in client area.
+        private Point GetSamplePoint(Sample sample)
         {
             // Domain
-            TimeSpan timeOffset = sample.time - _firstVisibleTime;
-            int x = (int)Math.Round((timeOffset.TotalSeconds * chartInfo.PixelsPerSecond));
+            TimeSpan timeOffset = sample.Time - _firstVisibleTime;
+            int x = (int)Math.Round((timeOffset.TotalSeconds * _paintInfo.PixelsPerSecond));
 
             // Range
-            var ratio = (sample.value - _minValue) / (_maxValue - _minValue);
-            int y = (int)Math.Round(chartInfo.GraphArea.Bottom - ratio * chartInfo.GraphArea.Height);
+            var ratio = (sample.Value - _rangeMin) / (_rangeMax - _rangeMin);
+            int y = (int)Math.Round(_paintInfo.PlotArea.Bottom - ratio * _paintInfo.PlotArea.Height);
             return new Point(x, y);
         }
 
-        class SampleInfo
+        private SampleInfo GetSampleInfo(Sample sample)
         {
-            public DateTime Time;
-            public bool Visible;
-            public int PixelOffset;
-            public double FractionalOffset;
-            public bool InEndZone;
-        }
-        private SampleInfo TestSample(Sample sample)
-        {
-            double offset = (sample.time - _firstVisibleTime).TotalSeconds * _chartInfo.PixelsPerSecond;
-            double fractionalOffset = (offset - _chartInfo.GraphArea.Left) / _chartInfo.GraphArea.Width;
+            double offset = (sample.Time - _firstVisibleTime).TotalSeconds * _paintInfo.PixelsPerSecond;
+            double fractionalOffset = (offset - _paintInfo.PlotArea.Left) / _paintInfo.PlotArea.Width;
             bool visible = fractionalOffset >= 0 && fractionalOffset <= 1;
             return new SampleInfo
             {
-                Time = sample.time,
+                Time = sample.Time,
                 PixelOffset = (int)offset,
                 FractionalOffset = fractionalOffset,
                 Visible = visible,
-                // TODO: No magic...
-                InEndZone = fractionalOffset >= 0.75 && visible
+                InEndZone = fractionalOffset >= ShiftAtFraction && visible
             };
         }
-        // TODO: Move...
 
+        // Pre-Condition: Chart info has been cached.
+        private double FractionToSeconds(double fraction)
+        {
+            return fraction * _paintInfo.PlotArea.Width / _paintInfo.PixelsPerSecond;
+        }
+        private TimeSpan FractionToTimeSpan(double fraction)
+        {
+            return TimeSpan.FromSeconds(fraction * _paintInfo.PlotArea.Width / _paintInfo.PixelsPerSecond);
+        }
+
+        // If end of samples was in view when the unprocessed samples were added to the queue and the most recently
+        // added sample is at least ShiftAtFraction from left edge of viewport, perform a shift (by modifying
+        // _firstVisibleTime) that puts the most recently added samples a configurable distance from the left edge of
+        // the viewport and return true.
+        // Return: true if and only if shift has been performed.
         private bool ShiftViewportMaybe()
         {
             // Shift can be required only when new samples are added.
             if (_firstNewSampleIndex < 0)
                 return false;
+
             // Where was last sample added?
-            // TODO: Clean up with helper methods.
-            var firstSampleInfo = TestSample(_samples[_firstNewSampleIndex]);
-            var lastSampleInfo = TestSample(_samples[_samples.Count - 1]);
-            // Test: Is first added sample visible and final added sample >= threshold near end of visible area?
-            // If so, then place the final added sample at or just past left edge of visible area, adding enough full
-            // screens as required to cover the final sample.
-            // Note: We don't shift if the user has scrolled leftward such that the added samples are entirely off screen.
+            var firstSampleInfo = GetSampleInfo(_samples[_firstNewSampleIndex]);
+            var lastSampleInfo = GetSampleInfo(_samples[_samples.Count - 1]);
+            // Is shift required?
+            // Note: Don't shift if the user has scrolled leftward such that the added samples are entirely off screen.
             if (firstSampleInfo.Visible && (lastSampleInfo.InEndZone || !lastSampleInfo.Visible))
             {
-                // TODO: Consider adding a configurable delta.
-                // Question: Should we align first or last sample at start? If the former, we need to account for
-                // unlikely possibility that last sample will force another shift. Hmm...
-                // Prefer putting first added sample at start of visible area, but if this points last added sample past
-                // a threshold, slide back till last added sample doesn't exceed the threshold: i.e., position first
-                // sample at...
-                //   max(0, threshold - (last - first))
-                _firstVisibleTime = _samples[_firstNewSampleIndex].time;
-                if (lastSampleInfo.FractionalOffset - firstSampleInfo.FractionalOffset > MaxNewSampleFractionalOffset)
+                // Shift needed.
+                // Logic: Prefer putting first added sample at start of visible area, but if this puts last added sample
+                // past a max, slide back till last added sample doesn't exceed the max.
+                _firstVisibleTime = _samples[_firstNewSampleIndex].Time - FractionToTimeSpan(ShiftToFractionDefault);
+                if (lastSampleInfo.FractionalOffset - firstSampleInfo.FractionalOffset > ShiftAtFractionDefault)
                 {
-                    // Set _firstVisibleTime to place last added sample at threshold.
-                    DateTime thresholdTime =
-                        firstSampleInfo.Time +
-                        TimeSpan.FromSeconds(
-                            MaxNewSampleFractionalOffset * _chartInfo.GraphArea.Width / _chartInfo.PixelsPerSecond);
-                    _firstVisibleTime += lastSampleInfo.Time - thresholdTime;
+                    // Set _firstVisibleTime to place last added sample at max.
+                    DateTime maxTime = _firstVisibleTime + FractionToTimeSpan(ShiftToMaxFractionDefault);
+                    _firstVisibleTime += lastSampleInfo.Time - maxTime;
                 }
 
                 UpdateScrollBar();
@@ -296,114 +397,85 @@ namespace RTD
 
             return false;
         }
+
+        // Handle a single scroll event using information cached in _scrollInfo at the time of the last paint.
         private void hScrollBar_Scroll(object sender, ScrollEventArgs e)
         {
             if (inhibitScrollEvent) return;
+            if (!HaveSamples) return;
+            // Do nothing if scroll info isn't cached.
             if (_scrollInfo == null) return;
             var sb = sender as HScrollBar;
             // Calculate signed time offset from current position.
             var timeOffset = (e.NewValue - _scrollInfo.ScrollValue) * _scrollInfo.SecondsPerSmallChange;
-            var oldFvt = _firstVisibleTime;
             _firstVisibleTime += TimeSpan.FromSeconds(timeOffset);
-            Console.WriteLine($"OnScroll: Max: {sb.Maximum} Value: {sb.Value} timeOffset={timeOffset} new fvt={_firstVisibleTime} delta={(_firstVisibleTime - oldFvt).TotalSeconds} oldValue={sb.Value} newValue={e.NewValue}");
-            // Limit leftward travel and rightward travel.
-            if (_firstVisibleTime < _samples[0].time)
-                _firstVisibleTime = _samples[0].time;
-            else if (_firstVisibleTime > _samples[_samples.Count - 1].time)
-                _firstVisibleTime = _samples[_samples.Count - 1].time;
+            // Limit leftward and rightward travel.
+            // Assumption: Scroll limits calculated such that final sample is at left edge of viewport when scrolled all the way right.
+            if (_firstVisibleTime < _samples[0].Time)
+                _firstVisibleTime = _samples[0].Time;
+            else if (_firstVisibleTime > _samples[_samples.Count - 1].Time)
+                _firstVisibleTime = _samples[_samples.Count - 1].Time;
 
             // Assume plot needs full redraw.
             panel.Invalidate();
         }
-        /*
-        Describe changes...
-        Addition of samples 
-        Shift
-        Note: Time locations of the beginning of each virtual screen never change.
-        Corollary: If the small change size is fixed, and we always add whole numbers of screens, each scroll position
-        has a fixed time associated with it for all time. The scroll bar's maximum changes an amount corresponding to a
-        full screen.
-        Question: What if we're not on a screen boundary when shift occurs?
-        Answer: Doesn't matter. If not on final screen, we must be on penultimate (else shift wouldn't occur). Add the
-new screen and shift to wherever we like, which doesn't need to be at the start of a screen.
-        */
+
+        // Calculate and apply updated parameters for horizontal scrollbar, taking full time extent of samples into
+        // account, and cache the parameters that will be needed by the scroll handler in _scrollInfo.
         private void UpdateScrollBar()
         {
-            if (_samples.Count == 0)
+            if (!HaveSamples)
                 return;
 
-            // Calculate total time span required to cover all samples with a little to spare.
-            double totalTimeWidth = (_samples[_samples.Count - 1].time - _samples[0].time).TotalSeconds;
+            // Calculate total time span required to cover all samples.
+            double totalTimeWidth = (LastSample.Time - FirstSample.Time).TotalSeconds;
             // Calculate time span of single screen full.
-            double screenTimeWidth = _chartInfo.GraphArea.Width / _chartInfo.PixelsPerSecond;
+            double screenTimeWidth = _paintInfo.PlotArea.Width / _paintInfo.PixelsPerSecond;
 
-            // Logic: SmallChange is always 1, and LargeChange is scaled to the window.
-            double secondsPerLargeChange = screenTimeWidth / 2; // TODO: No magic
-
-            // Make large change the number of small changes corresponding to around half a window.
-            var largeChange = (int)Math.Ceiling(screenTimeWidth / 2 / SecondsPerSmallChange);
-            // TODO: Subtracting screenTimeWidth makes sense only if we don't want to be able to scroll the final sample
-            // time in from the right edge of the window (as would be the case when displaying an image). In fact, we
-            // needn't subtract anything from totalTimeWidth, unless we want to ensure that there's always at least a
-            // few samples visible on the screen when we're scrolled all the way to the right.
+            // Logic: SmallChange is always 1, and LargeChange is scaled to give an approximate number of steps across
+            // the viewport.
+            var largeChange = (int)Math.Ceiling(screenTimeWidth / LargeStepsPerScreen / SecondsPerSmallChange);
+            double secondsPerLargeChange = largeChange * SecondsPerSmallChange;
+            // Note: Documentation advises subtracting visible width from total width when calculating max value;
+            // however, this makes sense only if we don't want to be able to scroll the final sample time in from the
+            // right edge of the window (as would be the case when displaying an image). In our case, we needn't
+            // subtract anything from totalTimeWidth, unless we want to ensure that more than one sample is visible when
+            // we're scrolled all the way right.
+            // TODO: Consider adding a margin for this...
             var maxValue =
-                (int)Math.Ceiling(Math.Max(0, totalTimeWidth /*- screenTimeWidth*/) / SecondsPerSmallChange) + largeChange - 1;
+                (int)Math.Ceiling(Math.Max(0, totalTimeWidth) / SecondsPerSmallChange) + largeChange - 1;
 
-            //double secondsPerSmallChange = Math.Floor(screenTimeWidth / SmallChangesPerSecond);
-            //double totalSampleTimeWidth = (_samples[_samples.Count - 1].time - _samples[0].time).TotalSeconds;
-            // Calculate number of steps in each direction from first visible sample.
-            // Design Decision: Ceiling ensures the final step to 0 will always get us at least to the first sample; in
-            // fact, it may put us before the first sample, so we'll need to limit it.
-            int stepsLeft =
-                (int)Math.Ceiling((_firstVisibleTime - _samples[0].time).TotalSeconds / SecondsPerSmallChange);
-            // Caveat: Max() prevents stepsRight from going negative when samples span less than a screen.
-            // TODO: Not sure stepsRight is needed...
-            int stepsRight =
-                Math.Max(0, (int)Math.Floor(
-                (_samples[_samples.Count - 1].time -
-                _firstVisibleTime - TimeSpan.FromSeconds(SecondsPerSmallChange)).TotalSeconds
-                / SecondsPerSmallChange));
+            // Calculate number of small steps between first sample time and first visible time.
+            // Design Decision: When the division produces a remainder, we round to nearest whole number, safe in the
+            // knowledge that scroll position zero's time is always hard-coded, never calculated from _firstVisibleTime.
+            int offset =
+                (int)Math.Round((_firstVisibleTime - FirstSample.Time).TotalSeconds / SecondsPerSmallChange);
 
-            // Cache for use in handler.
+            // Cache scroll info for use in scroll handler.
             _scrollInfo = new ScrollInfo {
                 SecondsPerLargeChange = secondsPerLargeChange,
                 SecondsPerSmallChange = SecondsPerSmallChange,
-                ScrollValue = stepsLeft
+                ScrollValue = offset
             };
-            Console.WriteLine($"UpdateScrollBar: max: {hScrollBar.Maximum} Value: {hScrollBar.Value} stepsLeft={stepsLeft} stepsRight={stepsRight} SecondsPerSmallChange={SecondsPerSmallChange} secondsPerLargeChange={secondsPerLargeChange}");
-            // Update scrollbar with events inhibited.
+
+            // Update scrollbar with events inhibited so as not to perform a scroll.
             inhibitScrollEvent = true;
             hScrollBar.Minimum = 0;
             hScrollBar.SmallChange = 1;
             hScrollBar.LargeChange = largeChange;
             hScrollBar.Maximum = maxValue;
-            hScrollBar.Value = stepsLeft;
+            hScrollBar.Value = offset;
             inhibitScrollEvent = false;
-
         }
-        private ChartInfo GetChartInfo(Graphics graphics, Rectangle clipRect)
-        {
-            var ret = new ChartInfo {
-                firstSampleIdx = -1,
-                lastSampleIdx = -1
-            };
-            // in/s px/in
-            // Note: A change to pixels per second would invalidate previously drawn portions of the graph, so either
-            // don't allow it, or else discard upon change.
-            ret.PixelsPerSecond = graphics.DpiX * _inchesPerSecond;
-            ret.GraphArea = panel.ClientRectangle;
-            // TODO: This is crude...
-            ret.GraphArea.Height = panel.Height - hScrollBar.Height;
-            // Get time offset to both edges of clip area.
-            DateTime timeLeft = _firstVisibleTime + TimeSpan.FromSeconds(clipRect.Left / ret.PixelsPerSecond);
-            DateTime timeRight = _firstVisibleTime + TimeSpan.FromSeconds(clipRect.Right / ret.PixelsPerSecond);
 
-            // TODO: Make sure this can't happen.
-            if (_samples.Count > 0)
-            {
-                ret.firstSampleIdx = GetSampleIndexAtTime(timeLeft, true);
-                ret.lastSampleIdx = GetSampleIndexAtTime(timeRight);
-            }
+        private PaintInfo GetPaintInfo(Graphics graphics, Rectangle clipRect)
+        {
+            var ret = new PaintInfo();
+
+            // Note: A change to pixels per second would invalidate previously drawn portions of the graph, so either
+            // don't allow it, or else invalidate upon change.
+            ret.PixelsPerSecond = graphics.DpiX * _inchesPerSecond;
+            ret.PlotArea = GetPlotArea();
 
             return ret;
         }
@@ -414,37 +486,50 @@ new screen and shift to wherever we like, which doesn't need to be at the start 
             var size = panel.Size;
             var g = e.Graphics;
             // Cache for later...
-            // What we need:
-            // 1. Range of samples that fall within clip rect's x range.
-            // 2. Start time corresponding to client area.
-            _chartInfo = GetChartInfo(g, e.ClipRectangle);
-            if (_chartInfo == null || _chartInfo.firstSampleIdx < 0)
+            _paintInfo = GetPaintInfo(g, e.ClipRectangle);
+
+            // Get time offset to both edges of clip area.
+            DateTime timeLeft = _firstVisibleTime + TimeSpan.FromSeconds(e.ClipRectangle.Left / _paintInfo.PixelsPerSecond);
+            DateTime timeRight = _firstVisibleTime + TimeSpan.FromSeconds(e.ClipRectangle.Right / _paintInfo.PixelsPerSecond);
+            var firstSampleIdx = GetSampleIndexAtTime(timeLeft, true);
+            var lastSampleIdx = GetSampleIndexAtTime(timeRight);
+
+            if (firstSampleIdx < 0)
                 // Nothing to do...
                 return;
+
             // Decide whether a shift is required.
             if (ShiftViewportMaybe())
+                // Shift invalidates the paint we were about to do, so just return.
                 return;
 
+            // Redraw range of new and/or shifted samples.
+            PlotSampleRange(g, firstSampleIdx, lastSampleIdx);
+
+            _firstNewSampleIndex = -1;
+
+            // Update scrollbar to account for added samples and possible shift.
+            UpdateScrollBar();
+        }
+
+        private void PlotSampleRange(Graphics graphics, int firstSampleIdx, int lastSampleIdx)
+        {
             // Loop over all samples not yet added.
-            var pt1 = GetPoint(_chartInfo, _samples[_chartInfo.firstSampleIdx]);
+            var pt1 = GetSamplePoint(_samples[firstSampleIdx]);
             int idx;
             Console.WriteLine($"Painting...");
-            for (idx = _chartInfo.firstSampleIdx + 1; idx <= _chartInfo.lastSampleIdx; idx++)
+            for (idx = firstSampleIdx + 1; idx <= lastSampleIdx; idx++)
             {
-                var pt2 = GetPoint(_chartInfo, _samples[idx]);
+                var pt2 = GetSamplePoint(_samples[idx]);
 
                 // TODO: Connected curve or points only?
                 //Console.WriteLine($"ClipRect: {e.ClipRectangle}");
                 //Console.WriteLine($"PlotArea: {GetPlotArea()}");
                 //Console.WriteLine($"Sample: ({_samples[idx].time}, {_samples[idx].value})");
                 //Console.WriteLine($"Drawing line from {pt1} to {pt2}");
-                g.DrawLine(_graphPen, pt1, pt2);
+                graphics.DrawLine(_graphPen, pt1, pt2);
                 pt1 = pt2;
             }
-            _firstNewSampleIndex = -1;
-
-            UpdateScrollBar();
-            
         }
 
         private void LabelStuff()
@@ -462,6 +547,7 @@ new screen and shift to wherever we like, which doesn't need to be at the start 
                     _labelBrush, new Point(i * 150, 100));
             }
             */
+        #endregion Methods
 
         }
     }
