@@ -18,7 +18,8 @@ namespace RTD
         private const double RangeMinDefault = -2;
         private const double RangeMaxDefault = 2;
         private const string YAxisLabelDefault = "Y Axis";
-        private const int UpdateTimerPeriod = 100;
+        private const int UpdatePeriodDefault = 100;
+        private const int AutoScrollInhibitTimeDefault = 250;
         #endregion Const
 
         #region Attributes
@@ -76,6 +77,7 @@ namespace RTD
             set
             {
                 _inchesPerSecond = value;
+                InvalidatePlot();
             }
 		}
         [StripChartConfig]
@@ -102,6 +104,24 @@ namespace RTD
                 _graphPen = value;
             }
 		}
+        [StripChartConfig]
+        public int UpdatePeriod {
+			get => _updatePeriod;
+            set
+            {
+                _updatePeriod = value;
+            }
+		}
+        // The following properties are probably less used and may eventually not be exported.
+        [StripChartConfig]
+        public int AutoScrollInhibitTime {
+			get => _autoScrollInhibitTime;
+            set
+            {
+                _autoScrollInhibitTime = value;
+            }
+		}
+
 
         #endregion Config Properties
 
@@ -112,6 +132,8 @@ namespace RTD
         private double _shiftAtFraction;
         private double _secondsPerSmallChange;
         private double _inchesPerSecond;
+        private int _updatePeriod;
+        private int _autoScrollInhibitTime;
 
         // Appearance
         private Font _labelFont;
@@ -130,6 +152,14 @@ namespace RTD
         bool HaveSamples { get => _samples.Count > 0; }
         // TODO: Redo StartTime property to allow user to set a start time earlier than the first sample.
         public DateTime StartTime { get => _samples.Count > 0 ? _samples[0].Time : DateTime.MinValue; }
+        bool LastSampleVisible
+        {
+            get => HaveSamples && GetSampleInfo(LastSample).Visible;
+        }
+        bool IsUserControllingScroll
+        {
+            get => _isScrollDragInProgress || _isScrollActivity;
+        }
         #endregion Helper Properties
 
         #region Fields
@@ -139,8 +169,13 @@ namespace RTD
         private int _firstNewSampleIndex = -1;
         private List<Sample> _samples = new List<Sample>();
         private Timer _updateTimer;
-
         private bool inhibitScrollEvent;
+        // TODO: Consider setting this flag for a period of time after each user scroll operation (e.g., click in channel).
+        // Rationale: Even if user isn't actively dragging scrollbar, clicking over and over in the scrollbar should be the same.
+        private bool _isScrollDragInProgress;
+        private bool _isScrollActivity;
+        private bool _isLastSampleVisible;
+        private Timer _scrollActivityTimer;
 
         #endregion Fields
         #region Types
@@ -200,8 +235,12 @@ namespace RTD
             //hScrollBar.BringToFront();
 
             // Initialize timer for adding accumulated samples to the plot periodically.
-            _updateTimer = new Timer { Enabled = true, Interval = UpdateTimerPeriod };
+            _updateTimer = new Timer { Enabled = true, Interval = UpdatePeriodDefault };
             _updateTimer.Tick += UpdateTimerTick;
+
+            // Initialize timer used to prevent auto scroll for brief interval following any user-initiated scroll activity.
+            _scrollActivityTimer = new Timer { Enabled = false, Interval = 250 };
+            _scrollActivityTimer.Tick += OnScrollActivityTimerExpired;
 
             // Draw plot once even before samples have been provided.
             panel.Invalidate();
@@ -214,14 +253,24 @@ namespace RTD
             panel.Invalidate();
             _firstNewSampleIndex = -1;
         }
+
+        // Invalidate just the plot area (not labels and axes).
+        private void InvalidatePlot()
+        {
+            panel.Invalidate(GetPlotArea());
+        }
         private void InitializePropertyDefaults()
         {
             RangeMin = RangeMinDefault;
             RangeMax = RangeMaxDefault;
+            UpdatePeriod = UpdatePeriodDefault;
             LargeStepsPerScreen = LargeStepsPerScreenDefault;
             ShiftAtFraction = ShiftAtFractionDefault;
             SecondsPerSmallChange = SecondsPerSmallChangeDefault;
             InchesPerSecond = InchesPerSecondDefault;
+
+            // Lesser used...
+            AutoScrollInhibitTime = AutoScrollInhibitTimeDefault;
 
             // Create and cache fonts, brushes, etc.
             _labelFont = new Font(Font, FontStyle.Bold);
@@ -289,7 +338,7 @@ namespace RTD
 
         }
 
-        // Calcualate index of sample most nearly corresponding to input time, considering lessOrEqual to determine
+        // Calculate index of sample most nearly corresponding to input time, considering lessOrEqual to determine
         // whether to return index just below or above where no exact match exists.
         private int GetSampleIndexAtTime(DateTime time, bool lessOrEqual = false)
         {
@@ -322,6 +371,7 @@ namespace RTD
         }
 
         // Convert sample to pixel offset in client area.
+        // TODO: Decide what to do if the point is not in view: return null or just return Point outside viewport?
         private Point GetSamplePoint(Sample sample)
         {
             // Domain
@@ -374,8 +424,10 @@ namespace RTD
             var firstSampleInfo = GetSampleInfo(_samples[_firstNewSampleIndex]);
             var lastSampleInfo = GetSampleInfo(_samples[_samples.Count - 1]);
             // Is shift required?
-            // Note: Don't shift if the user has scrolled leftward such that the added samples are entirely off screen.
-            if (firstSampleInfo.Visible && (lastSampleInfo.InEndZone || !lastSampleInfo.Visible))
+            // Logic: Never shift while user is actively controlling position (e.g. with scrollbar) or if the user has
+            // scrolled leftward such that the added samples are entirely off screen. OTOH, Do shift if the final sample
+            // was visible at the time of the last paint but has been moved (e.g., due to zoom).
+            if (!IsUserControllingScroll && firstSampleInfo.Visible && (lastSampleInfo.InEndZone || !lastSampleInfo.Visible))
             {
                 // Shift needed.
                 // Logic: Prefer putting first added sample at start of visible area, but if this puts last added sample
@@ -398,9 +450,21 @@ namespace RTD
             return false;
         }
 
+        private void RecordScrollActivity()
+        {
+            // Cancel timer (if active) and reset.
+            _scrollActivityTimer.Enabled = false;
+            _scrollActivityTimer.Interval = AutoScrollInhibitTime;
+            _isScrollActivity = true;
+            _scrollActivityTimer.Enabled = true;
+            _isScrollDragInProgress = hScrollBar.Capture;
+            Console.WriteLine($"Capture: {_isScrollDragInProgress}");
+        }
+
         // Handle a single scroll event using information cached in _scrollInfo at the time of the last paint.
         private void hScrollBar_Scroll(object sender, ScrollEventArgs e)
         {
+            RecordScrollActivity();
             if (inhibitScrollEvent) return;
             if (!HaveSamples) return;
             // Do nothing if scroll info isn't cached.
@@ -418,6 +482,18 @@ namespace RTD
 
             // Assume plot needs full redraw.
             panel.Invalidate();
+        }
+
+        private void OnScrollActivityTimerExpired(object sender, EventArgs e)
+        {
+            _isScrollActivity = false;
+        }
+
+        private void hScrollBar_MouseCaptureChanged(object sender, EventArgs e)
+        {
+            var sb = sender as HScrollBar;
+            Console.WriteLine("Capture lost!");
+            _isScrollDragInProgress = false;
         }
 
         // Calculate and apply updated parameters for horizontal scrollbar, taking full time extent of samples into
@@ -506,6 +582,12 @@ namespace RTD
             // Redraw range of new and/or shifted samples.
             PlotSampleRange(g, firstSampleIdx, lastSampleIdx);
 
+            // Make note of whether final sample was visible at time of paint, which matters (eg) when zoom causes the
+            // last sample to leave viewport abruptly.
+            // TODO: Consider adding these to a post-paint cache, analogous to _paintInfo; alternatively, consider just
+            // breaking PaintInfo out into individual fields.
+            _isLastSampleVisible = LastSampleVisible;
+
             _firstNewSampleIndex = -1;
 
             // Update scrollbar to account for added samples and possible shift.
@@ -550,5 +632,6 @@ namespace RTD
         #endregion Methods
 
         }
+
     }
 }

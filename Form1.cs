@@ -16,6 +16,10 @@ namespace RTD
         {
             InitializeComponent();
 
+            stripChart.InchesPerSecond = 1;
+            stripChart.RangeMin = -2.5;
+            stripChart.RangeMax = 2.5;
+
             stripChartPropertyGrid.SelectedObject = stripChart;
             stripChartPropertyGrid.BrowsableAttributes = new AttributeCollection(new StripChart.StripChartConfigAttribute());
             stripChartPropertyGrid.Refresh();

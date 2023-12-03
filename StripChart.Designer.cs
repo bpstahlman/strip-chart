@@ -41,6 +41,7 @@ namespace RTD
             this.hScrollBar.Size = new System.Drawing.Size(801, 30);
             this.hScrollBar.TabIndex = 0;
             this.hScrollBar.Scroll += new System.Windows.Forms.ScrollEventHandler(this.hScrollBar_Scroll);
+            this.hScrollBar.MouseCaptureChanged += new System.EventHandler(this.hScrollBar_MouseCaptureChanged);
             // 
             // panel
             // 
